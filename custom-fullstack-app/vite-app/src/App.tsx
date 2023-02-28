@@ -1,32 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  asyncEmit,
-  useAsyncEmit,
-  useSocketIOEvent,
-} from "./hooks/useSocketIOEvent";
+import { asyncEmit, useSocketIOEvent } from "./hooks/useSocketIOEvent";
 import { useSocketIOServer } from "./hooks/useSocketIOServer";
 
 type SpeedMeasurement = {
   fileSizeInBytes: number;
   downloadTimeInSecs: number;
 };
-// const calcAvgDownloadSpeedInMbps = (arr: SpeedMeasurement[]) => {
-//   const totalDownloadTimeInSecs = arr.reduce(
-//     (a, b) => a + b.downloadTimeInSecs,
-//     0
-//   );
-//
-//   const totalDownloadSizeInBytes = arr.reduce(
-//     (a, b) => a + b.fileSizeInBytes,
-//     0
-//   );
-//   const totalDownloadSizeInMBits = (totalDownloadSizeInBytes * 8) / 2 ** 20;
-//   arr.forEach((a) => {
-//     console.log((a.fileSizeInBytes * 8) / 2 ** 20 / a.downloadTimeInSecs);
-//   });
-//   console.log(totalDownloadSizeInMBits, totalDownloadTimeInSecs);
-//   return totalDownloadSizeInMBits / totalDownloadTimeInSecs;
-// };
 
 const MAX_FILE_SIZE_IN_MB = 128;
 
@@ -41,9 +20,6 @@ const calcDownloadSpeedInMbps = (
 const SpeedTest = ({ downloadFileStartSizeInBits = 1024 }) => {
   const socket = useSocketIOServer();
   const [pingTime, setPingTime] = useState<number | null>(null);
-  const [downloadTimeInSecs, setDownloadTimeInSecs] = useState<number | null>(
-    null
-  );
   const [downloadSpeedInMbps, setDownloadSpeedInMbps] = useState<null | number>(
     null
   );
@@ -55,6 +31,8 @@ const SpeedTest = ({ downloadFileStartSizeInBits = 1024 }) => {
   const [fileSizeInBytes, setFileSizeInBytes] = useState(
     downloadFileStartSizeInBits
   );
+
+  const [downloadTestInProgress, setDownloadTestInProgress] = useState(false);
 
   // useLayoutEffect(() => {
   //   if (downloadTimeInSecs)
@@ -82,11 +60,7 @@ const SpeedTest = ({ downloadFileStartSizeInBits = 1024 }) => {
     endEvent: "speed-test",
   });
 
-  const startTest = async () => {
-    console.log(socket);
-    console.log("test!");
-    if (!waitingForPing) emitPing(performance.now());
-
+  const downloadTest = async () => {
     const { time: startTime } = await emitSpeedTest({
       time: performance.now(),
       fileSize: fileSizeInBytes,
@@ -102,6 +76,12 @@ const SpeedTest = ({ downloadFileStartSizeInBits = 1024 }) => {
       measuredDownloadSpeedInMbps > downloadSpeedInMbps
     )
       setDownloadSpeedInMbps(measuredDownloadSpeedInMbps);
+    else {
+      console.log("set false");
+      setDownloadTestInProgress(false);
+      return;
+    }
+
     setDownloadMeasurements([
       ...downloadMeasurements,
       { downloadTimeInSecs: latency / 1000, fileSizeInBytes },
@@ -123,21 +103,23 @@ const SpeedTest = ({ downloadFileStartSizeInBits = 1024 }) => {
         setFileSizeInBytes(fileSizeInBytes * 2);
     }
   };
+  const startTest = async () => {
+    console.log("test!");
+    if (!waitingForPing) emitPing(performance.now());
+    setDownloadTestInProgress(true);
+    // downloadTest();
+  };
 
   useEffect(() => {
-    startTest();
-  }, [fileSizeInBytes]);
-
-  const fileSizeInBits = fileSizeInBytes * 8;
-  const fileSizeInMBits = fileSizeInBits / 2 ** 20;
+    if (downloadTestInProgress) downloadTest();
+  }, [fileSizeInBytes, downloadTestInProgress]);
 
   return (
     <div>
       <h1>Speed test</h1>
       <button onClick={startTest}>Start Test</button>
 
-      <p>fileSize: {fileSizeInMBits / 8}MB </p>
-      <p>Download time: {downloadTimeInSecs?.toFixed(3)}Secs </p>
+      <p>fileSize: {fileSizeInBytes / 2 ** 20}MB </p>
       {pingTime && <p>ping: {pingTime.toFixed(2)}ms</p>}
       {downloadSpeedInMbps && (
         <p>
