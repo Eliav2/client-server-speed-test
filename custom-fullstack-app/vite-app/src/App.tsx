@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { useSocketIOEvent } from "./hooks/useSocketIOEvent";
+import {
+  asyncEmit,
+  useAsyncEmit,
+  useSocketIOEvent,
+} from "./hooks/useSocketIOEvent";
 import { useSocketIOServer } from "./hooks/useSocketIOServer";
 
 type SpeedMeasurement = {
@@ -26,10 +30,21 @@ type SpeedMeasurement = {
 
 const MAX_FILE_SIZE_IN_MB = 128;
 
+const calcDownloadSpeedInMbps = (
+  fileSizeInBytes: number,
+  downloadTimeInSecs: number
+) => {
+  const fileSizeInMBits = (fileSizeInBytes * 8) / 2 ** 20;
+  return fileSizeInMBits / downloadTimeInSecs;
+};
+
 const SpeedTest = ({ downloadFileStartSizeInBits = 1024 }) => {
   const socket = useSocketIOServer();
   const [pingTime, setPingTime] = useState<number | null>(null);
   const [downloadTimeInSecs, setDownloadTimeInSecs] = useState<number | null>(
+    null
+  );
+  const [downloadSpeedInMbps, setDownloadSpeedInMbps] = useState<null | number>(
     null
   );
 
@@ -61,96 +76,60 @@ const SpeedTest = ({ downloadFileStartSizeInBits = 1024 }) => {
       },
     });
 
-  const {
-    emit: emitDownloadSpeedTest,
-    waitingForResponse: waitingForDownloadSpeedTest,
-  } = useSocketIOEvent({
+  const emitSpeedTest = asyncEmit({
     socket,
     startEvent: "start-speed-test",
     endEvent: "speed-test",
-    onEnd: ({ time: startTime }) => {
-      const end = performance.now();
-      const latency = end - startTime;
-      setDownloadTimeInSecs(latency / 1000);
-      setDownloadMeasurements([
-        ...downloadMeasurements,
-        { downloadTimeInSecs: latency / 1000, fileSizeInBytes },
-      ]);
-    },
   });
 
-  const startTest = () => {
+  const startTest = async () => {
+    console.log(socket);
+    console.log("test!");
     if (!waitingForPing) emitPing(performance.now());
-    if (!waitingForDownloadSpeedTest)
-      emitDownloadSpeedTest({
-        time: performance.now(),
-        fileSize: fileSizeInBytes,
-      });
+
+    const { time: startTime } = await emitSpeedTest({
+      time: performance.now(),
+      fileSize: fileSizeInBytes,
+    });
+    const end = performance.now();
+    const latency = end - startTime;
+    const measuredDownloadSpeedInMbps = calcDownloadSpeedInMbps(
+      fileSizeInBytes,
+      latency / 1000
+    );
+    if (
+      !downloadSpeedInMbps ||
+      measuredDownloadSpeedInMbps > downloadSpeedInMbps
+    )
+      setDownloadSpeedInMbps(measuredDownloadSpeedInMbps);
+    setDownloadMeasurements([
+      ...downloadMeasurements,
+      { downloadTimeInSecs: latency / 1000, fileSizeInBytes },
+    ]);
+
+    const curSpeed = calcDownloadSpeedInMbps(fileSizeInBytes, latency / 1000);
+    const prevSpeed =
+      downloadMeasurements.at(-1) &&
+      calcDownloadSpeedInMbps(
+        downloadMeasurements.at(-1)!.fileSizeInBytes,
+        downloadMeasurements.at(-1)!.downloadTimeInSecs
+      );
+    if (
+      latency < 50 ||
+      downloadMeasurements.length < 2 ||
+      curSpeed > prevSpeed!
+    ) {
+      if (fileSizeInBytes < MAX_FILE_SIZE_IN_MB * 2 ** 20)
+        setFileSizeInBytes(fileSizeInBytes * 2);
+    }
   };
+
+  useEffect(() => {
+    startTest();
+  }, [fileSizeInBytes]);
 
   const fileSizeInBits = fileSizeInBytes * 8;
   const fileSizeInMBits = fileSizeInBits / 2 ** 20;
-  const downloadSpeedInMbps =
-    downloadTimeInSecs && fileSizeInMBits / downloadTimeInSecs;
-
-  const prevDownloadSpeedInMbps = useRef<number | null>(null);
-
-  // const avgDownloadSpeedInMbps =
-  //   calcAvgDownloadSpeedInMbps(downloadMeasurements);
-  // console.log(downloadMeasurements);
-
-  // console.log(waitingForDownloadSpeedTest);
-  useEffect(() => {
-    // if we are waiting for a response, do nothing
-    if (waitingForDownloadSpeedTest) {
-      return;
-    }
-
-    // at least 3 measurements
-    if (
-      downloadMeasurements.length < 3 ||
-      !downloadSpeedInMbps ||
-      !prevDownloadSpeedInMbps.current
-    ) {
-      startTest();
-      setFileSizeInBytes(fileSizeInBytes * 2);
-      return;
-    }
-    console.log(downloadMeasurements.at(-1)?.downloadTimeInSecs);
-    console.log(
-      `downloadSpeedInMbps: ${downloadSpeedInMbps}Mbps, prevDownloadSpeedInMbps: ${prevDownloadSpeedInMbps.current}Mbps`
-    );
-    // as long as the measured speed increases, trigger another measurement
-    if (downloadSpeedInMbps > prevDownloadSpeedInMbps.current) {
-      // double the file size
-      if (fileSizeInBytes < MAX_FILE_SIZE_IN_MB * 2 ** 20)
-        setFileSizeInBytes(fileSizeInBytes * 2);
-      startTest();
-      // setFinalDownloadSpeedInMbps(avgDownloadSpeedInMbps);
-    }
-  }, [waitingForDownloadSpeedTest]);
-
-  useEffect(() => {
-    if (downloadSpeedInMbps) {
-      prevDownloadSpeedInMbps.current = downloadSpeedInMbps;
-    }
-  }, [downloadSpeedInMbps]);
-
-  console.log("123");
-  // useLayoutEffect(() => {
-  //   // console.log(downloadTimeSecs, downloadSpeedWaitingForResponse);
-  //   if (
-  //       downloadTimeInSecs &&
-  //       !waitingForDownloadSpeedTest &&
-  //       downloadTimeInSecs < 0.5
-  //   ) {
-  //     console.log(`${downloadTimeInSecs}secs is lower then 0.1Secs, So twice!`);
-  //     // console.log("twice!", downloadTimeSecs, downloadSpeedWaitingForResponse);
-  //     setFileSizeInBytes(fileSizeInBytes * 2);
-  //   } else {
-  //     console.log("speed");
-  //   }
-  // }, [waitingForDownloadSpeedTest]);
 
   return (
     <div>
@@ -160,10 +139,10 @@ const SpeedTest = ({ downloadFileStartSizeInBits = 1024 }) => {
       <p>fileSize: {fileSizeInMBits / 8}MB </p>
       <p>Download time: {downloadTimeInSecs?.toFixed(3)}Secs </p>
       {pingTime && <p>ping: {pingTime.toFixed(2)}ms</p>}
-      {downloadTimeInSecs && (
+      {downloadSpeedInMbps && (
         <p>
-          {(fileSizeInMBits / downloadTimeInSecs).toFixed(3)}Mbps (
-          {(fileSizeInMBits / downloadTimeInSecs / 8).toFixed(3)}MB/sec)
+          {downloadSpeedInMbps.toFixed(3)}Mbps (
+          {(downloadSpeedInMbps / 8).toFixed(3)}MB/sec)
         </p>
       )}
     </div>

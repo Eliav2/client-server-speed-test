@@ -24,5 +24,12 @@ export const useSocketIOServer = ({
       socket.off("disconnect");
     };
   }, []);
+
+  useEffect(() => {
+    if (!socket.connected) {
+      socket.connect();
+    }
+  }, [socket.connected]);
+
   return socket;
 };
